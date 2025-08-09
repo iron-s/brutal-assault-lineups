@@ -24,34 +24,13 @@
         </header>
 
         <main>
-            <div class="flex items-center justify-center mb-4 text-gray-400">
-                <span class="mr-3 text-sm font-medium">Search Single Artist</span>
-                <label for="mode-toggle" class="inline-flex relative items-center cursor-pointer">
-                    <input type="checkbox" value="" id="mode-toggle" class="sr-only peer">
-                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-                </label>
-                <span class="ml-3 text-sm font-medium">Show All Years</span>
-            </div>
-
             <div class="relative mb-4">
                 <input type="text" id="artist-search"
                     class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg p-4 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
-                    placeholder="Type an artist name (e.g., 'Hypocrisy')">
-                <div id="autocomplete-results"
-                    class="absolute z-10 w-full bg-gray-800 border border-gray-700 rounded-lg mt-1 max-h-60 overflow-y-auto hidden">
-                </div>
+                    placeholder="Filter all bands...">
             </div>
 
-            <div id="results-container" class="bg-gray-800 rounded-lg p-6 min-h-[10rem] flex items-center justify-center">
-                <p class="text-gray-500" id="results-placeholder">Artist appearance history will be shown here.</p>
-                <div id="artist-appearances" class="hidden">
-                    <h2 id="artist-name" class="text-2xl font-bold mb-4 text-red-400"></h2>
-                    <ul id="appearance-list" class="list-disc list-inside space-y-2 text-lg">
-                    </ul>
-                </div>
-            </div>
-
-            <div id="all-years-container" class="hidden space-y-8">
+            <div id="all-years-container" class="space-y-8">
                 <!-- Lineups will be rendered here by JavaScript -->
             </div>
         </main>
@@ -97,13 +76,6 @@
 
         // --- Application Logic ---
         const searchInput = document.getElementById('artist-search');
-        const autocompleteResults = document.getElementById('autocomplete-results');
-        const resultsContainer = document.getElementById('results-container');
-        const resultsPlaceholder = document.getElementById('results-placeholder');
-        const artistAppearancesDiv = document.getElementById('artist-appearances');
-        const artistNameEl = document.getElementById('artist-name');
-        const appearanceListEl = document.getElementById('appearance-list');
-        const modeToggle = document.getElementById('mode-toggle');
         const allYearsContainer = document.getElementById('all-years-container');
 
         function renderAllLineups() {
@@ -139,34 +111,7 @@
 
         renderAllLineups();
 
-        modeToggle.addEventListener('change', (event) => {
-            const isAllYearsMode = event.target.checked;
-
-            if (isAllYearsMode) {
-                // Switch to "Show All Years" mode
-                resultsContainer.classList.add('hidden');
-                allYearsContainer.classList.remove('hidden');
-                searchInput.placeholder = 'Filter all bands...';
-                autocompleteResults.classList.add('hidden');
-            } else {
-                // Switch to "Search Single Artist" mode
-                allYearsContainer.classList.add('hidden');
-                resultsContainer.classList.remove('hidden');
-                searchInput.placeholder = "Type an artist name (e.g., 'Hypocrisy')";
-            }
-            // Reset search and results
-            searchInput.value = '';
-            resultsPlaceholder.classList.remove('hidden');
-            artistAppearancesDiv.classList.add('hidden');
-            // Reset all-years filter
-            document.querySelectorAll('.year-section').forEach(section => {
-                section.classList.remove('hidden');
-                section.querySelectorAll('.band-item').forEach(item => item.classList.remove('hidden'));
-            });
-        });
-
         // 1. Prepare data for Fuse.js
-        // We create a unique list of all artists who have ever played.
         const allArtists = [...new Set(Object.values(lineups).flat())];
 
         // 2. Configure Fuse.js for fuzzy searching
@@ -176,106 +121,40 @@
         };
         const fuse = new Fuse(allArtists, fuseOptions);
 
-        // 3. Handle search input
+        // 3. Handle search input for fuzzy filtering
         searchInput.addEventListener('input', () => {
-            const isAllYearsMode = modeToggle.checked;
-            const query = searchInput.value.toLowerCase();
+            const query = searchInput.value.trim();
 
-            if (isAllYearsMode) {
-                // --- All-Years Filtering Logic ---
-                autocompleteResults.classList.add('hidden'); // Ensure autocomplete is hidden
-
+            if (query === '') {
                 document.querySelectorAll('.year-section').forEach(section => {
-                    let hasVisibleBands = false;
-                    section.querySelectorAll('.band-item').forEach(item => {
-                        const bandName = item.dataset.bandName;
-                        if (bandName.includes(query)) {
-                            item.classList.remove('hidden');
-                            hasVisibleBands = true;
-                        } else {
-                            item.classList.add('hidden');
-                        }
-                    });
+                    section.classList.remove('hidden');
+                    section.querySelectorAll('.band-item').forEach(item => item.classList.remove('hidden'));
+                });
+                return;
+            }
 
-                    // Hide year heading if no bands are visible
-                    if (hasVisibleBands) {
-                        section.classList.remove('hidden');
+            const results = fuse.search(query);
+            const matchingArtists = new Set(results.map(result => result.item.toLowerCase()));
+
+            document.querySelectorAll('.year-section').forEach(section => {
+                let hasVisibleBands = false;
+                section.querySelectorAll('.band-item').forEach(item => {
+                    const bandName = item.dataset.bandName;
+                    if (matchingArtists.has(bandName)) {
+                        item.classList.remove('hidden');
+                        hasVisibleBands = true;
                     } else {
-                        section.classList.add('hidden');
+                        item.classList.add('hidden');
                     }
                 });
 
-            } else {
-                // --- Single Artist Search Logic (Fuse.js) ---
-                if (query.length < 2) {
-                    autocompleteResults.innerHTML = '';
-                    autocompleteResults.classList.add('hidden');
-                    return;
-                }
-
-                const results = fuse.search(searchInput.value).slice(0, 5); // Use original case for Fuse
-                autocompleteResults.innerHTML = '';
-
-                if (results.length > 0) {
-                    results.forEach(result => {
-                        const li = document.createElement('div');
-                        li.textContent = result.item;
-                        li.className = 'p-3 hover:bg-red-500 hover:text-white cursor-pointer transition-colors';
-                        li.addEventListener('click', () => {
-                            searchInput.value = result.item;
-                            autocompleteResults.classList.add('hidden');
-                            displayArtistHistory(result.item);
-                        });
-                        autocompleteResults.appendChild(li);
-                    });
-                    autocompleteResults.classList.remove('hidden');
+                if (hasVisibleBands) {
+                    section.classList.remove('hidden');
                 } else {
-                    autocompleteResults.classList.add('hidden');
+                    section.classList.add('hidden');
                 }
-            }
+            });
         });
-        
-        // Hide autocomplete when clicking outside
-        document.addEventListener('click', (event) => {
-            if (!searchInput.contains(event.target)) {
-                autocompleteResults.classList.add('hidden');
-            }
-        });
-
-
-        // 4. Display the results for a selected artist
-        function displayArtistHistory(artist) {
-            const appearances = [];
-            // Iterate through all years to find when the artist played
-            for (const year in lineups) {
-                // Using case-insensitive comparison for safety
-                if (lineups[year].some(band => band.toLowerCase() === artist.toLowerCase())) {
-                    appearances.push(year);
-                }
-            }
-            
-            // Sort years in descending order (most recent first)
-            appearances.sort((a, b) => b - a);
-
-            resultsPlaceholder.classList.add('hidden');
-            artistAppearancesDiv.classList.remove('hidden');
-
-            artistNameEl.textContent = artist;
-            appearanceListEl.innerHTML = ''; // Clear previous results
-
-            if (appearances.length > 0) {
-                appearances.forEach(year => {
-                    const li = document.createElement('li');
-                    li.textContent = `Appeared in ${year}`;
-                    appearanceListEl.appendChild(li);
-                });
-            } else {
-                // This case should ideally not happen if artist is from our list, but it's good practice
-                const li = document.createElement('li');
-                li.textContent = 'No appearances found.';
-                appearanceListEl.appendChild(li);
-            }
-        }
     </script>
 
 </body>
