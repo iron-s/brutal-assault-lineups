@@ -5,13 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Brutal Assault Artist History</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
+        }
+
+        /* Filtering depends on these, so they are defined locally rather than
+           relying on the Tailwind CDN being reachable. */
+        .hidden,
+        [hidden] {
+            display: none;
+        }
+
+        mark {
+            background-color: rgba(239, 68, 68, 0.4);
+            color: #fff;
+            border-radius: 0.25rem;
+            padding: 0 0.125rem;
         }
     </style>
 </head>
@@ -24,11 +37,21 @@
         </header>
 
         <main>
-            <div class="relative mb-4">
-                <input type="text" id="artist-search"
-                    class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg p-4 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
-                    placeholder="Filter all bands...">
+            <div class="relative mb-2">
+                <input type="text" id="artist-search" autocomplete="off" autocapitalize="off"
+                    spellcheck="false" aria-describedby="search-help"
+                    class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg p-4 pr-14 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
+                    placeholder="Search bands by name...">
+                <button type="button" id="clear-search" aria-label="Clear search" hidden
+                    class="absolute right-3 top-1/2 -translate-y-1/2 text-3xl leading-none px-2 text-gray-500 hover:text-white focus:outline-none focus:text-white">&times;</button>
             </div>
+
+            <p id="search-help" class="text-sm text-gray-500 mb-1">
+                Shows every band whose name contains each word you type, in any order.
+                Case and accents are ignored &mdash; <span class="text-gray-400">mgla</span> finds
+                <span class="text-gray-400">Mg&#322;a</span>. Press Esc to clear.
+            </p>
+            <p id="search-summary" class="text-sm text-gray-400 mb-4 h-5" role="status" aria-live="polite"></p>
 
             <div id="all-years-container" class="space-y-8">
                 <!-- Lineups will be rendered here by JavaScript -->
@@ -85,12 +108,64 @@
             "1996": ["Agressive Tyrants", "Enochian", "HEAD", "Infanticide", "Ingrowing", "Kaviar Kavalier", "Psycho Analytic", "Scenery", "Sickness", "Silent Stream of Godless Elegy", "Stigma", "Vacuum", "YBCA"]
         };
 
+        // --- Search normalisation ---
+        // Search is deliberately literal: a band matches when its name *contains*
+        // every word that was typed. No fuzzy scoring, no edit distance, no
+        // surprise matches - what you type is what gets highlighted.
+        // The only leniency is normalisation, so a Latin-keyboard query still
+        // reaches names written with accents or non-ASCII letters.
+
+        // Letters that Unicode decomposition cannot strip on its own, because
+        // they are distinct letters rather than an accented base letter.
+        const LETTER_ALIASES = {
+            'ł': 'l', 'ø': 'o', 'đ': 'd', 'ð': 'd', 'þ': 'th', 'ß': 'ss',
+            'æ': 'ae', 'œ': 'oe', 'ħ': 'h', 'ı': 'i', 'ŋ': 'n',
+            '’': "'", '‘': "'", '‛': "'", 'ʼ': "'", '´': "'",
+            '“': '"', '”': '"', '–': '-', '—': '-', ' ': ' '
+        };
+
+        function normalizeChar(char) {
+            const lower = char.toLowerCase();
+            if (Object.prototype.hasOwnProperty.call(LETTER_ALIASES, lower)) {
+                return LETTER_ALIASES[lower];
+            }
+            // Strip diacritics: "ó" -> "o", "ö" -> "o", "å" -> "a".
+            const stripped = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            return stripped || lower;
+        }
+
+        // Normalises a string while remembering where every normalised character
+        // came from, so matches can be highlighted on the original spelling even
+        // when normalisation changes the length ("þ" -> "th").
+        function buildSearchIndex(text) {
+            let normalized = '';
+            const sourceIndex = [];
+            for (let i = 0; i < text.length; i++) {
+                const chunk = normalizeChar(text[i]);
+                for (let j = 0; j < chunk.length; j++) {
+                    sourceIndex.push(i);
+                }
+                normalized += chunk;
+            }
+            return { normalized, sourceIndex };
+        }
+
+        function normalizeQuery(text) {
+            return buildSearchIndex(text).normalized;
+        }
+
         // --- Application Logic ---
         const searchInput = document.getElementById('artist-search');
+        const clearButton = document.getElementById('clear-search');
+        const searchSummary = document.getElementById('search-summary');
         const allYearsContainer = document.getElementById('all-years-container');
+
+        // Flat view of the rendered DOM, so filtering never re-queries the document.
+        const yearSections = [];
 
         function renderAllLineups() {
             allYearsContainer.innerHTML = ''; // Clear previous content
+            yearSections.length = 0;
             const sortedYears = Object.keys(lineups).sort((a, b) => b - a); // Sort years descending
 
             for (const year of sortedYears) {
@@ -107,65 +182,149 @@
                 bandList.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2';
 
                 const sortedBands = [...new Set(lineups[year])].sort((a, b) => a.localeCompare(b));
+                const bands = [];
 
                 for (const band of sortedBands) {
                     const bandItem = document.createElement('li');
                     bandItem.textContent = band;
                     bandItem.className = 'text-gray-300 band-item';
-                    bandItem.dataset.bandName = band.toLowerCase();
                     bandList.appendChild(bandItem);
+
+                    const index = buildSearchIndex(band);
+                    bands.push({
+                        element: bandItem,
+                        name: band,
+                        normalized: index.normalized,
+                        sourceIndex: index.sourceIndex
+                    });
                 }
+
                 yearSection.appendChild(bandList);
                 allYearsContainer.appendChild(yearSection);
+                yearSections.push({ element: yearSection, year, bands });
             }
         }
 
-        renderAllLineups();
+        // Every occurrence of every term, as ranges over the original band name.
+        function findHighlightRanges(band, terms) {
+            const ranges = [];
+            for (const term of terms) {
+                let from = 0;
+                let at = band.normalized.indexOf(term, from);
+                while (at !== -1) {
+                    ranges.push([
+                        band.sourceIndex[at],
+                        band.sourceIndex[at + term.length - 1] + 1
+                    ]);
+                    from = at + term.length;
+                    at = band.normalized.indexOf(term, from);
+                }
+            }
 
-        // 1. Prepare data for Fuse.js
-        const allArtists = [...new Set(Object.values(lineups).flat())];
+            // Merge overlapping ranges so nested <mark> elements cannot happen.
+            ranges.sort((a, b) => a[0] - b[0]);
+            const merged = [];
+            for (const range of ranges) {
+                const last = merged[merged.length - 1];
+                if (last && range[0] <= last[1]) {
+                    last[1] = Math.max(last[1], range[1]);
+                } else {
+                    merged.push(range.slice());
+                }
+            }
+            return merged;
+        }
 
-        // 2. Configure Fuse.js for fuzzy searching
-        const fuseOptions = {
-            includeScore: true,
-            threshold: 0.4, // Adjust for more or less strictness (0.0 = perfect match, 1.0 = match anything)
-        };
-        const fuse = new Fuse(allArtists, fuseOptions);
-
-        // 3. Handle search input for fuzzy filtering
-        searchInput.addEventListener('input', () => {
-            const query = searchInput.value.trim();
-
-            if (query === '') {
-                document.querySelectorAll('.year-section').forEach(section => {
-                    section.classList.remove('hidden');
-                    section.querySelectorAll('.band-item').forEach(item => item.classList.remove('hidden'));
-                });
+        function renderBandName(band, terms) {
+            const ranges = terms.length ? findHighlightRanges(band, terms) : [];
+            if (ranges.length === 0) {
+                band.element.textContent = band.name;
                 return;
             }
 
-            const results = fuse.search(query);
-            const matchingArtists = new Set(results.map(result => result.item.toLowerCase()));
-
-            document.querySelectorAll('.year-section').forEach(section => {
-                let hasVisibleBands = false;
-                section.querySelectorAll('.band-item').forEach(item => {
-                    const bandName = item.dataset.bandName;
-                    if (matchingArtists.has(bandName)) {
-                        item.classList.remove('hidden');
-                        hasVisibleBands = true;
-                    } else {
-                        item.classList.add('hidden');
-                    }
-                });
-
-                if (hasVisibleBands) {
-                    section.classList.remove('hidden');
-                } else {
-                    section.classList.add('hidden');
+            band.element.textContent = '';
+            let cursor = 0;
+            for (const [start, end] of ranges) {
+                if (start > cursor) {
+                    band.element.appendChild(document.createTextNode(band.name.slice(cursor, start)));
                 }
-            });
+                const mark = document.createElement('mark');
+                mark.className = 'bg-red-500/40 text-white rounded px-0.5';
+                mark.textContent = band.name.slice(start, end);
+                band.element.appendChild(mark);
+                cursor = end;
+            }
+            if (cursor < band.name.length) {
+                band.element.appendChild(document.createTextNode(band.name.slice(cursor)));
+            }
+        }
+
+        function matches(band, terms) {
+            return terms.every(term => band.normalized.includes(term));
+        }
+
+        function applyFilter() {
+            const rawQuery = searchInput.value;
+            const terms = normalizeQuery(rawQuery).split(/\s+/).filter(Boolean);
+
+            clearButton.hidden = rawQuery === '';
+
+            let matchingBands = 0;
+            let matchingYears = 0;
+            const distinctNames = new Set();
+
+            for (const section of yearSections) {
+                let visibleInYear = 0;
+
+                for (const band of section.bands) {
+                    const visible = terms.length === 0 || matches(band, terms);
+                    band.element.classList.toggle('hidden', !visible);
+                    if (visible) {
+                        visibleInYear++;
+                        if (terms.length > 0) {
+                            distinctNames.add(band.normalized);
+                        }
+                    }
+                    renderBandName(band, visible ? terms : []);
+                }
+
+                section.element.classList.toggle('hidden', visibleInYear === 0);
+                if (visibleInYear > 0) {
+                    matchingYears++;
+                    matchingBands += visibleInYear;
+                }
+            }
+
+            if (terms.length === 0) {
+                searchSummary.textContent = '';
+            } else if (matchingBands === 0) {
+                searchSummary.textContent = 'No band name contains ' +
+                    terms.map(term => '"' + term + '"').join(' and ') + '.';
+            } else {
+                searchSummary.textContent = distinctNames.size + ' ' +
+                    (distinctNames.size === 1 ? 'band' : 'bands') + ' · ' +
+                    matchingBands + ' ' + (matchingBands === 1 ? 'appearance' : 'appearances') +
+                    ' across ' + matchingYears + ' ' + (matchingYears === 1 ? 'year' : 'years');
+            }
+        }
+
+        function clearSearch() {
+            searchInput.value = '';
+            applyFilter();
+            searchInput.focus();
+        }
+
+        renderAllLineups();
+        applyFilter();
+
+        searchInput.addEventListener('input', applyFilter);
+        searchInput.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && searchInput.value !== '') {
+                event.preventDefault();
+                clearSearch();
+            }
         });
+        clearButton.addEventListener('click', clearSearch);
     </script>
 
 </body>
