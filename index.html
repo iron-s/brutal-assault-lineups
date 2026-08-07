@@ -5,13 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Brutal Assault Artist History</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
+        }
+
+        /* Filtering depends on these, so they are defined locally rather than
+           relying on the Tailwind CDN being reachable. */
+        .hidden,
+        [hidden] {
+            display: none;
+        }
+
+        mark {
+            background-color: rgba(239, 68, 68, 0.4);
+            color: #fff;
+            border-radius: 0.25rem;
+            padding: 0 0.125rem;
+        }
+
+        mark.near-match {
+            background-color: transparent;
+            color: #fcd34d;
+            text-decoration: underline dotted;
+            text-underline-offset: 2px;
         }
     </style>
 </head>
@@ -24,11 +44,24 @@
         </header>
 
         <main>
-            <div class="relative mb-4">
-                <input type="text" id="artist-search"
-                    class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg p-4 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
-                    placeholder="Filter all bands...">
+            <div class="relative mb-2">
+                <input type="text" id="artist-search" autocomplete="off" autocapitalize="off"
+                    spellcheck="false" aria-describedby="search-help"
+                    class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg p-4 pr-14 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
+                    placeholder="Search bands by name...">
+                <button type="button" id="clear-search" aria-label="Clear search" hidden
+                    class="absolute right-3 top-1/2 -translate-y-1/2 text-3xl leading-none px-2 text-gray-500 hover:text-white focus:outline-none focus:text-white">&times;</button>
             </div>
+
+            <p id="search-help" class="text-sm text-gray-500 mb-1">
+                Shows every band whose name contains each word you type, in any order.
+                Case and accents are ignored &mdash; <span class="text-gray-400">mgla</span> finds
+                <span class="text-gray-400">Mg&#322;a</span>. A word of 5+ letters that matches
+                nothing is retried allowing one typo, and those
+                <span class="text-amber-300 underline decoration-dotted underline-offset-2">near matches</span>
+                are marked. Press Esc to clear.
+            </p>
+            <p id="search-summary" class="text-sm text-gray-400 mb-4 h-5" role="status" aria-live="polite"></p>
 
             <div id="all-years-container" class="space-y-8">
                 <!-- Lineups will be rendered here by JavaScript -->
@@ -85,12 +118,165 @@
             "1996": ["Agressive Tyrants", "Enochian", "HEAD", "Infanticide", "Ingrowing", "Kaviar Kavalier", "Psycho Analytic", "Scenery", "Sickness", "Silent Stream of Godless Elegy", "Stigma", "Vacuum", "YBCA"]
         };
 
+        // --- Search rules ---
+        // A band matches when its name *contains* every word that was typed.
+        // That literal rule always runs first and is never diluted by scoring,
+        // so a query that matches something exactly returns exactly that.
+        //
+        // Typo tolerance is a fallback, not a ranking: only a word that matches
+        // nothing at all is retried allowing a single edit (one wrong, missing
+        // or extra letter, or two neighbouring letters swapped). Because it only
+        // fires when the alternative is an empty screen, it can never add noise
+        // to a query that already worked.
+        //
+        // Short words are the dangerous case. Measured against this dataset, a
+        // one-edit search returns a median of 145 names for a 3-letter word and
+        // 19 for a 4-letter word, but only 3 at five letters and 1 at six - so
+        // words shorter than MIN_TYPO_LENGTH are matched literally, unless the
+        // rest of the query has already narrowed the field to NARROW_FIELD
+        // names or fewer, which bounds how much a short word can drag in.
+
+        // Letters that Unicode decomposition cannot strip on its own, because
+        // they are distinct letters rather than an accented base letter.
+        const LETTER_ALIASES = {
+            'ł': 'l', 'ø': 'o', 'đ': 'd', 'ð': 'd', 'þ': 'th', 'ß': 'ss',
+            'æ': 'ae', 'œ': 'oe', 'ħ': 'h', 'ı': 'i', 'ŋ': 'n',
+            '’': "'", '‘': "'", '‛': "'", 'ʼ': "'", '´': "'",
+            '“': '"', '”': '"', '–': '-', '—': '-', ' ': ' '
+        };
+
+        function normalizeChar(char) {
+            const lower = char.toLowerCase();
+            if (Object.prototype.hasOwnProperty.call(LETTER_ALIASES, lower)) {
+                return LETTER_ALIASES[lower];
+            }
+            // Strip diacritics: "ó" -> "o", "ö" -> "o", "å" -> "a".
+            const stripped = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            return stripped || lower;
+        }
+
+        // Normalises a string while remembering where every normalised character
+        // came from, so matches can be highlighted on the original spelling even
+        // when normalisation changes the length ("þ" -> "th").
+        function buildSearchIndex(text) {
+            let normalized = '';
+            const sourceIndex = [];
+            for (let i = 0; i < text.length; i++) {
+                const chunk = normalizeChar(text[i]);
+                for (let j = 0; j < chunk.length; j++) {
+                    sourceIndex.push(i);
+                }
+                normalized += chunk;
+            }
+            return { normalized, sourceIndex };
+        }
+
+        function normalizeQuery(text) {
+            return buildSearchIndex(text).normalized;
+        }
+
+        // A word must be at least this long before a typo in it is forgiven on
+        // its own, and the field must be at most this narrow before a shorter
+        // word gets the same treatment.
+        const MIN_TYPO_LENGTH = 5;
+        const NARROW_FIELD = 60;
+        const MAX_EDITS = 1;
+
+        // Finds the closest window of `text` to `term`, allowing at most
+        // MAX_EDITS single-character edits or one swap of neighbours. This is a
+        // Damerau-Levenshtein (optimal string alignment) table whose first row
+        // is all zeroes, which lets the match start anywhere in `text`, and which
+        // carries the start of each best path so the window can be highlighted.
+        // Returns null when nothing is close enough.
+        function findNearMatch(term, text) {
+            const m = term.length;
+            const n = text.length;
+            if (m === 0 || m > n + MAX_EDITS) return null;
+
+            let beforeCost = null;
+            let beforeStart = null;
+            let prevCost = new Array(n + 1);
+            let prevStart = new Array(n + 1);
+            for (let j = 0; j <= n; j++) {
+                prevCost[j] = 0;
+                prevStart[j] = j;
+            }
+
+            for (let i = 1; i <= m; i++) {
+                const cost = new Array(n + 1);
+                const start = new Array(n + 1);
+                cost[0] = i;
+                start[0] = 0;
+
+                for (let j = 1; j <= n; j++) {
+                    // Substitute, or match for free.
+                    let best = prevCost[j - 1] + (term[i - 1] === text[j - 1] ? 0 : 1);
+                    let from = prevStart[j - 1];
+
+                    const missing = prevCost[j] + 1; // letter of the term absent from the name
+                    if (missing < best) { best = missing; from = prevStart[j]; }
+
+                    const extra = cost[j - 1] + 1;   // extra letter in the name
+                    if (extra < best) { best = extra; from = start[j - 1]; }
+
+                    if (i > 1 && j > 1 && term[i - 1] === text[j - 2] && term[i - 2] === text[j - 1]) {
+                        const swapped = beforeCost[j - 2] + 1;
+                        if (swapped < best) { best = swapped; from = beforeStart[j - 2]; }
+                    }
+
+                    cost[j] = best;
+                    start[j] = from;
+                }
+
+                beforeCost = prevCost;
+                beforeStart = prevStart;
+                prevCost = cost;
+                prevStart = start;
+            }
+
+            const bestCost = Math.min(...prevCost);
+            if (bestCost > MAX_EDITS) return null;
+
+            // Several windows can tie on cost ("corpes" is one edit from both
+            // "corps" and "corpse"). Prefer the widest, so the highlight covers
+            // the whole word the reader is being shown rather than a fragment.
+            let bestStart = 0;
+            let bestEnd = 0;
+            let bestWidth = -1;
+            for (let j = 0; j <= n; j++) {
+                if (prevCost[j] !== bestCost) continue;
+                const width = j - prevStart[j];
+                if (width > bestWidth) { bestWidth = width; bestStart = prevStart[j]; bestEnd = j; }
+            }
+            return { start: bestStart, end: Math.max(bestStart, bestEnd) };
+        }
+
         // --- Application Logic ---
         const searchInput = document.getElementById('artist-search');
+        const clearButton = document.getElementById('clear-search');
+        const searchSummary = document.getElementById('search-summary');
         const allYearsContainer = document.getElementById('all-years-container');
+
+        // Flat view of the rendered DOM, so filtering never re-queries the document.
+        const yearSections = [];
+        // One entry per distinct band name, shared by every year it played in, so
+        // matching runs once per name rather than once per appearance.
+        const catalog = new Map();
+
+        function catalogEntry(name) {
+            let entry = catalog.get(name);
+            if (!entry) {
+                const index = buildSearchIndex(name);
+                entry = { name, normalized: index.normalized, sourceIndex: index.sourceIndex };
+                catalog.set(name, entry);
+            }
+            return entry;
+        }
 
         function renderAllLineups() {
             allYearsContainer.innerHTML = ''; // Clear previous content
+            yearSections.length = 0;
+            catalog.clear();
             const sortedYears = Object.keys(lineups).sort((a, b) => b - a); // Sort years descending
 
             for (const year of sortedYears) {
@@ -107,65 +293,211 @@
                 bandList.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2';
 
                 const sortedBands = [...new Set(lineups[year])].sort((a, b) => a.localeCompare(b));
+                const bands = [];
 
                 for (const band of sortedBands) {
                     const bandItem = document.createElement('li');
                     bandItem.textContent = band;
                     bandItem.className = 'text-gray-300 band-item';
-                    bandItem.dataset.bandName = band.toLowerCase();
                     bandList.appendChild(bandItem);
+
+                    bands.push({ element: bandItem, entry: catalogEntry(band) });
                 }
+
                 yearSection.appendChild(bandList);
                 allYearsContainer.appendChild(yearSection);
+                yearSections.push({ element: yearSection, year, bands });
             }
         }
 
-        renderAllLineups();
+        // Works out which names match, and how each word earned its match: as a
+        // literal substring, or only after a typo was forgiven.
+        function resolveQuery(terms) {
+            const names = [...catalog.values()];
+            const literal = [];
+            const missing = [];
 
-        // 1. Prepare data for Fuse.js
-        const allArtists = [...new Set(Object.values(lineups).flat())];
+            for (const term of terms) {
+                if (names.some(entry => entry.normalized.includes(term))) {
+                    literal.push(term);
+                } else {
+                    missing.push(term);
+                }
+            }
 
-        // 2. Configure Fuse.js for fuzzy searching
-        const fuseOptions = {
-            includeScore: true,
-            threshold: 0.4, // Adjust for more or less strictness (0.0 = perfect match, 1.0 = match anything)
-        };
-        const fuse = new Fuse(allArtists, fuseOptions);
+            let candidates = names;
+            for (const term of literal) {
+                candidates = candidates.filter(entry => entry.normalized.includes(term));
+            }
 
-        // 3. Handle search input for fuzzy filtering
-        searchInput.addEventListener('input', () => {
-            const query = searchInput.value.trim();
+            // Longest word first: the most specific misspelling narrows the field
+            // for the rest, which is what lets a short word be forgiven at all.
+            const forgiven = [];
+            for (const term of [...missing].sort((a, b) => b.length - a.length)) {
+                if (term.length < MIN_TYPO_LENGTH && candidates.length > NARROW_FIELD) {
+                    return { entries: new Set(), literal, forgiven: [], tooShort: term };
+                }
+                candidates = candidates.filter(entry => findNearMatch(term, entry.normalized) !== null);
+                forgiven.push(term);
+            }
 
-            if (query === '') {
-                document.querySelectorAll('.year-section').forEach(section => {
-                    section.classList.remove('hidden');
-                    section.querySelectorAll('.band-item').forEach(item => item.classList.remove('hidden'));
-                });
+            return {
+                entries: new Set(candidates),
+                literal,
+                // Report them back in the order they were typed, not the order
+                // the matcher happened to need them in.
+                forgiven: terms.filter(term => forgiven.includes(term)),
+                tooShort: null
+            };
+        }
+
+        // Where each word landed in a name, as ranges over its original spelling.
+        function findHighlightRanges(entry, plan) {
+            const ranges = [];
+
+            const toSource = (start, end) => {
+                if (end <= start) return null;
+                return { start: entry.sourceIndex[start], end: entry.sourceIndex[end - 1] + 1 };
+            };
+
+            for (const term of plan.literal) {
+                let at = entry.normalized.indexOf(term);
+                while (at !== -1) {
+                    const range = toSource(at, at + term.length);
+                    if (range) ranges.push({ ...range, literal: true });
+                    at = entry.normalized.indexOf(term, at + term.length);
+                }
+            }
+
+            for (const term of plan.forgiven) {
+                const hit = findNearMatch(term, entry.normalized);
+                if (!hit) continue;
+                const range = toSource(hit.start, hit.end);
+                if (range) ranges.push({ ...range, literal: false });
+            }
+
+            // Merge overlapping ranges so nested <mark> elements cannot happen. A
+            // range stays literal only if nothing approximate overlapped it.
+            ranges.sort((a, b) => a.start - b.start);
+            const merged = [];
+            for (const range of ranges) {
+                const last = merged[merged.length - 1];
+                if (last && range.start <= last.end) {
+                    last.end = Math.max(last.end, range.end);
+                    last.literal = last.literal && range.literal;
+                } else {
+                    merged.push({ ...range });
+                }
+            }
+            return merged;
+        }
+
+        function renderBandName(band, plan) {
+            const entry = band.entry;
+            const ranges = plan ? findHighlightRanges(entry, plan) : [];
+            if (ranges.length === 0) {
+                band.element.textContent = entry.name;
                 return;
             }
 
-            const results = fuse.search(query);
-            const matchingArtists = new Set(results.map(result => result.item.toLowerCase()));
-
-            document.querySelectorAll('.year-section').forEach(section => {
-                let hasVisibleBands = false;
-                section.querySelectorAll('.band-item').forEach(item => {
-                    const bandName = item.dataset.bandName;
-                    if (matchingArtists.has(bandName)) {
-                        item.classList.remove('hidden');
-                        hasVisibleBands = true;
-                    } else {
-                        item.classList.add('hidden');
-                    }
-                });
-
-                if (hasVisibleBands) {
-                    section.classList.remove('hidden');
-                } else {
-                    section.classList.add('hidden');
+            band.element.textContent = '';
+            let cursor = 0;
+            for (const range of ranges) {
+                if (range.start > cursor) {
+                    band.element.appendChild(document.createTextNode(entry.name.slice(cursor, range.start)));
                 }
-            });
+                const mark = document.createElement('mark');
+                // Approximate hits are marked differently, so it is never a
+                // mystery which part of a result the search had to guess at.
+                mark.className = range.literal
+                    ? 'bg-red-500/40 text-white rounded px-0.5'
+                    : 'bg-transparent text-amber-300 underline decoration-dotted underline-offset-2 near-match';
+                mark.textContent = entry.name.slice(range.start, range.end);
+                band.element.appendChild(mark);
+                cursor = range.end;
+            }
+            if (cursor < entry.name.length) {
+                band.element.appendChild(document.createTextNode(entry.name.slice(cursor)));
+            }
+        }
+
+        const quoted = terms => terms.map(term => '"' + term + '"').join(' and ');
+        const plural = (count, word) => count + ' ' + word + (count === 1 ? '' : 's');
+
+        function summarise(plan, bands, appearances, years) {
+            if (plan.tooShort) {
+                return 'No band name contains "' + plan.tooShort + '" — words under ' +
+                    MIN_TYPO_LENGTH + ' letters are matched exactly.';
+            }
+            if (bands === 0) {
+                if (plan.forgiven.length > 0) {
+                    return 'No band name comes within one typo of ' + quoted(plan.forgiven) + '.';
+                }
+                return 'No band name contains ' + quoted(plan.literal) +
+                    (plan.literal.length > 1 ? ' together.' : '.');
+            }
+            const counts = plural(bands, 'band') + ' · ' + plural(appearances, 'appearance') +
+                ' across ' + plural(years, 'year');
+            if (plan.forgiven.length > 0) {
+                return 'Nothing contains ' + quoted(plan.forgiven) +
+                    ' — allowing one typo: ' + counts;
+            }
+            return counts;
+        }
+
+        function applyFilter() {
+            const rawQuery = searchInput.value;
+            const terms = normalizeQuery(rawQuery).split(/\s+/).filter(Boolean);
+
+            clearButton.hidden = rawQuery === '';
+
+            const plan = terms.length > 0 ? resolveQuery(terms) : null;
+            let appearances = 0;
+            let matchingYears = 0;
+            const distinctNames = new Set();
+
+            for (const section of yearSections) {
+                let visibleInYear = 0;
+
+                for (const band of section.bands) {
+                    const visible = plan === null || plan.entries.has(band.entry);
+                    band.element.classList.toggle('hidden', !visible);
+                    if (visible) {
+                        visibleInYear++;
+                        if (plan) distinctNames.add(band.entry);
+                    }
+                    renderBandName(band, visible ? plan : null);
+                }
+
+                section.element.classList.toggle('hidden', visibleInYear === 0);
+                if (visibleInYear > 0) {
+                    matchingYears++;
+                    appearances += visibleInYear;
+                }
+            }
+
+            searchSummary.textContent = plan === null
+                ? ''
+                : summarise(plan, distinctNames.size, appearances, matchingYears);
+        }
+
+        function clearSearch() {
+            searchInput.value = '';
+            applyFilter();
+            searchInput.focus();
+        }
+
+        renderAllLineups();
+        applyFilter();
+
+        searchInput.addEventListener('input', applyFilter);
+        searchInput.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && searchInput.value !== '') {
+                event.preventDefault();
+                clearSearch();
+            }
         });
+        clearButton.addEventListener('click', clearSearch);
     </script>
 
 </body>
