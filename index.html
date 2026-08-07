@@ -1,23 +1,223 @@
 <!DOCTYPE html>
-<html lang="en" class="bg-gray-900">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Brutal Assault Artist History</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        body {
-            font-family: 'Inter', sans-serif;
+        /* Everything the page needs is in this file: no CDN, no webfont, so it
+           renders identically offline and on a phone with a bad connection.
+           The system UI stack is the closest always-available match to Inter. */
+        :root {
+            --bg: #111827;
+            --field: #1f2937;
+            --edge: #374151;
+            --text: #f9fafb;
+            --band: #d1d5db;
+            --muted: #9ca3af;
+            --faint: #6b7280;
+            --accent: #ef4444;
+            --accent-soft: #f87171;
+            --near: #fcd34d;
+            /* Height of the sticky search bar and the top of the visible
+               viewport; both are kept up to date by script so the year headings
+               can stack underneath the search bar instead of behind it. */
+            --bar-height: 0px;
+            --viewport-top: 0px;
         }
 
-        /* Filtering depends on these, so they are defined locally rather than
-           relying on the Tailwind CDN being reachable. */
-        .hidden,
-        [hidden] {
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        html {
+            background-color: var(--bg);
+            -webkit-text-size-adjust: 100%;
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.45;
+        }
+
+        .page {
+            max-width: 48rem;
+            margin: 0 auto;
+            padding: 0 1rem 2rem;
+        }
+
+        .masthead {
+            text-align: center;
+            padding: 1.5rem 0 0.5rem;
+        }
+
+        .masthead h1 {
+            margin: 0 0 0.25rem;
+            font-size: 2.25rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .masthead p {
+            margin: 0;
+            font-size: 1.125rem;
+            color: var(--band);
+        }
+
+        /* The search bar stays put while the results scroll, which is what makes
+           the page usable once an on-screen keyboard has eaten most of it. */
+        .search-bar {
+            position: sticky;
+            top: var(--viewport-top);
+            z-index: 20;
+            background-color: var(--bg);
+            padding: 0.5rem 0 0.35rem;
+        }
+
+        .search-field {
+            position: relative;
+        }
+
+        #artist-search {
+            width: 100%;
+            /* 1rem keeps mobile browsers from zooming in on focus. */
+            font: inherit;
+            font-size: 1rem;
+            color: var(--text);
+            background-color: var(--field);
+            border: 2px solid var(--edge);
+            border-radius: 0.5rem;
+            padding: 0.7rem 3rem 0.7rem 0.85rem;
+            transition: border-color 0.15s;
+        }
+
+        #artist-search::placeholder {
+            color: var(--faint);
+        }
+
+        #artist-search:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        #clear-search {
+            position: absolute;
+            right: 0.25rem;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: 0;
+            cursor: pointer;
+            font-size: 1.75rem;
+            line-height: 1;
+            padding: 0 0.6rem;
+            color: var(--faint);
+        }
+
+        #clear-search:hover {
+            color: var(--text);
+        }
+
+        .search-meta {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem;
+            min-height: 1.4rem;
+            font-size: 0.8125rem;
+        }
+
+        #search-summary {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        #help-toggle {
+            flex: none;
+            background: none;
+            border: 0;
+            cursor: pointer;
+            padding: 0;
+            font: inherit;
+            color: var(--faint);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        #help-toggle:hover {
+            color: var(--band);
+        }
+
+        #clear-search:focus-visible,
+        #help-toggle:focus-visible {
+            color: var(--text);
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+            border-radius: 0.25rem;
+        }
+
+        /* Room is scarce with a keyboard open, so the label shrinks to a mark. */
+        .help-short {
             display: none;
+        }
+
+        .search-help {
+            margin: 0.25rem 0 0;
+            padding: 0.6rem 0.85rem;
+            list-style: none;
+            font-size: 0.8125rem;
+            color: var(--muted);
+            background-color: var(--field);
+            border-radius: 0.5rem;
+        }
+
+        .search-help li + li {
+            margin-top: 0.25rem;
+        }
+
+        .year-section + .year-section {
+            margin-top: 1.5rem;
+        }
+
+        .year-heading {
+            position: sticky;
+            top: calc(var(--viewport-top) + var(--bar-height));
+            z-index: 10;
+            margin: 0 0 0.5rem;
+            padding: 0.35rem 0;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-soft);
+            background-color: var(--bg);
+        }
+
+        .band-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.4rem 1rem;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .band-item {
+            color: var(--band);
+        }
+
+        .site-footer {
+            margin-top: 2.5rem;
+            text-align: center;
+            font-size: 0.8125rem;
+            color: var(--faint);
+        }
+
+        .site-footer p {
+            margin: 0.25rem 0;
         }
 
         mark {
@@ -29,46 +229,145 @@
 
         mark.near-match {
             background-color: transparent;
-            color: #fcd34d;
+            color: var(--near);
             text-decoration: underline dotted;
             text-underline-offset: 2px;
         }
+
+        .example {
+            color: var(--band);
+        }
+
+        .example-near {
+            color: var(--near);
+            text-decoration: underline dotted;
+            text-underline-offset: 2px;
+        }
+
+        /* Filtering toggles these, so they must not depend on anything else. */
+        .hidden {
+            display: none;
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+
+        @media (min-width: 640px) {
+            .page {
+                padding: 0 2rem 3rem;
+            }
+
+            .masthead h1 {
+                font-size: 3rem;
+            }
+
+            .masthead p {
+                font-size: 1.25rem;
+            }
+
+            .band-list {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+
+            .year-heading {
+                font-size: 1.875rem;
+            }
+        }
+
+        @media (min-width: 1024px) {
+            .band-list {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+        }
+
+        /* Short viewport: a phone in landscape, or any phone with the keyboard
+           open. Everything that is not the search field or a result gives up its
+           space. The class is set from visualViewport, which is the only signal
+           on iOS, where the keyboard does not resize the layout viewport. */
+        body.compact .masthead,
+        body.compact .site-footer {
+            display: none;
+        }
+
+        body.compact .search-bar {
+            padding-top: 0.35rem;
+        }
+
+        body.compact .year-heading {
+            font-size: 1.125rem;
+            padding: 0.25rem 0;
+            margin-bottom: 0.25rem;
+        }
+
+        body.compact .year-section + .year-section {
+            margin-top: 0.9rem;
+        }
+
+        body.compact .band-list {
+            gap: 0.2rem 1rem;
+        }
+
+        body.compact .help-long {
+            display: none;
+        }
+
+        body.compact .help-short {
+            display: inline-block;
+            width: 1.35rem;
+            line-height: 1.25rem;
+            text-align: center;
+            border: 1px solid currentColor;
+            border-radius: 50%;
+            text-decoration: none;
+        }
+
+        body.compact #help-toggle {
+            text-decoration: none;
+        }
     </style>
 </head>
-<body class="bg-gray-900 text-white">
+<body>
 
-    <div class="container mx-auto p-4 md:p-8 max-w-3xl">
-        <header class="text-center mb-8">
-            <h1 class="text-4xl md:text-5xl font-bold mb-2 text-red-500">Brutal Assault</h1>
-            <p class="text-lg md:text-xl text-gray-300">Artist Appearance History</p>
+    <div class="page">
+        <header class="masthead">
+            <h1>Brutal Assault</h1>
+            <p>Artist Appearance History</p>
         </header>
 
         <main>
-            <div class="relative mb-2">
-                <input type="text" id="artist-search" autocomplete="off" autocapitalize="off"
-                    spellcheck="false" aria-describedby="search-help"
-                    class="w-full bg-gray-800 border-2 border-gray-700 rounded-lg p-4 pr-14 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
-                    placeholder="Search bands by name...">
-                <button type="button" id="clear-search" aria-label="Clear search" hidden
-                    class="absolute right-3 top-1/2 -translate-y-1/2 text-3xl leading-none px-2 text-gray-500 hover:text-white focus:outline-none focus:text-white">&times;</button>
+            <div class="search-bar">
+                <div class="search-field">
+                    <input type="text" id="artist-search" autocomplete="off" autocapitalize="off"
+                        spellcheck="false" aria-describedby="search-help"
+                        placeholder="Search bands by name...">
+                    <button type="button" id="clear-search" aria-label="Clear search" hidden>&times;</button>
+                </div>
+
+                <div class="search-meta">
+                    <p id="search-summary" role="status" aria-live="polite"></p>
+                    <button type="button" id="help-toggle" aria-expanded="false"
+                        aria-controls="search-help" aria-label="How search works"
+                        title="How search works"><span class="help-long">How search works</span><span
+                        class="help-short" aria-hidden="true">?</span></button>
+                </div>
             </div>
 
-            <p id="search-help" class="text-sm text-gray-500 mb-1">
-                Shows every band whose name contains each word you type, in any order.
-                Case and accents are ignored &mdash; <span class="text-gray-400">mgla</span> finds
-                <span class="text-gray-400">Mg&#322;a</span>. A word of 5+ letters that matches
-                nothing is retried allowing one typo, and those
-                <span class="text-amber-300 underline decoration-dotted underline-offset-2">near matches</span>
-                are marked. Press Esc to clear.
-            </p>
-            <p id="search-summary" class="text-sm text-gray-400 mb-4 h-5" role="status" aria-live="polite"></p>
+            <ul id="search-help" class="search-help" hidden>
+                <li>Every word you type must appear in the name, in any order.</li>
+                <li>Case and accents are ignored: <span class="example">mgla</span> finds
+                    <span class="example">Mg&#322;a</span>.</li>
+                <li>A word of 5+ letters that matches nothing is retried with one typo allowed;
+                    those <span class="example-near">near matches</span> are marked.</li>
+                <li>Esc clears the search.</li>
+            </ul>
 
-            <div id="all-years-container" class="space-y-8">
+            <div id="all-years-container">
                 <!-- Lineups will be rendered here by JavaScript -->
             </div>
         </main>
 
-        <footer class="text-center mt-8 text-gray-600 text-sm">
+        <footer class="site-footer">
             <p>Lineup data collected from various public sources. Accuracy may vary for older festival editions.</p>
             <p>Created with &hearts; for metalheads.</p>
         </footer>
@@ -256,6 +555,9 @@
         const clearButton = document.getElementById('clear-search');
         const searchSummary = document.getElementById('search-summary');
         const allYearsContainer = document.getElementById('all-years-container');
+        const searchBar = document.querySelector('.search-bar');
+        const helpToggle = document.getElementById('help-toggle');
+        const searchHelp = document.getElementById('search-help');
 
         // Flat view of the rendered DOM, so filtering never re-queries the document.
         const yearSections = [];
@@ -286,11 +588,11 @@
 
                 const yearHeading = document.createElement('h2');
                 yearHeading.textContent = year;
-                yearHeading.className = 'text-3xl font-bold text-red-400 mb-4 sticky top-0 bg-gray-900 py-2 year-heading';
+                yearHeading.className = 'year-heading';
                 yearSection.appendChild(yearHeading);
 
                 const bandList = document.createElement('ul');
-                bandList.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2';
+                bandList.className = 'band-list';
 
                 const sortedBands = [...new Set(lineups[year])].sort((a, b) => a.localeCompare(b));
                 const bands = [];
@@ -298,7 +600,7 @@
                 for (const band of sortedBands) {
                     const bandItem = document.createElement('li');
                     bandItem.textContent = band;
-                    bandItem.className = 'text-gray-300 band-item';
+                    bandItem.className = 'band-item';
                     bandList.appendChild(bandItem);
 
                     bands.push({ element: bandItem, entry: catalogEntry(band) });
@@ -409,9 +711,7 @@
                 const mark = document.createElement('mark');
                 // Approximate hits are marked differently, so it is never a
                 // mystery which part of a result the search had to guess at.
-                mark.className = range.literal
-                    ? 'bg-red-500/40 text-white rounded px-0.5'
-                    : 'bg-transparent text-amber-300 underline decoration-dotted underline-offset-2 near-match';
+                mark.className = range.literal ? '' : 'near-match';
                 mark.textContent = entry.name.slice(range.start, range.end);
                 band.element.appendChild(mark);
                 cursor = range.end;
@@ -487,8 +787,46 @@
             searchInput.focus();
         }
 
+        function toggleHelp() {
+            const open = searchHelp.hidden;
+            searchHelp.hidden = !open;
+            helpToggle.setAttribute('aria-expanded', String(open));
+        }
+
+        // --- Fitting the page to what is actually visible ---
+        // The year headings stick to the bottom edge of the search bar, so they
+        // need its real height, which changes with the summary line wrapping.
+        function syncBarHeight() {
+            document.documentElement.style.setProperty(
+                '--bar-height', searchBar.offsetHeight + 'px');
+        }
+
+        // With a keyboard open there is room for the search field and a handful
+        // of results, and nothing else. visualViewport reports that shrunken
+        // area on both platforms; its offsetTop keeps the sticky bar inside the
+        // visible strip on iOS, where the layout viewport does not move.
+        const viewport = window.visualViewport;
+
+        function syncViewport() {
+            const height = viewport ? viewport.height : window.innerHeight;
+            document.body.classList.toggle('compact', height < 560);
+            document.documentElement.style.setProperty(
+                '--viewport-top', (viewport ? Math.max(0, Math.round(viewport.offsetTop)) : 0) + 'px');
+            syncBarHeight();
+        }
+
         renderAllLineups();
         applyFilter();
+        syncViewport();
+
+        if (window.ResizeObserver) {
+            new ResizeObserver(syncBarHeight).observe(searchBar);
+        }
+        window.addEventListener('resize', syncViewport);
+        if (viewport) {
+            viewport.addEventListener('resize', syncViewport);
+            viewport.addEventListener('scroll', syncViewport);
+        }
 
         searchInput.addEventListener('input', applyFilter);
         searchInput.addEventListener('keydown', event => {
@@ -498,6 +836,7 @@
             }
         });
         clearButton.addEventListener('click', clearSearch);
+        helpToggle.addEventListener('click', toggleHelp);
     </script>
 
 </body>
